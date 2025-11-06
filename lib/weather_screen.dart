@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'dart:ui';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
-import 'package:weather_app/secret_key.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class WeatherScreen extends StatefulWidget {
   const WeatherScreen({super.key});
@@ -17,22 +18,41 @@ class _WeatherScreenState extends State<WeatherScreen> {
   final TextEditingController dropDownController = TextEditingController();
   List<String> cities = ['Jalingo', 'Abuja', 'Lagos'];
   String city = "Jalingo";
+  static final String _apiKey =
+      dotenv.env['OPENWEATHER_API_KEY'] ?? 'API_KEY_NOT_FOUND';
+  @override
+  void initState() {
+    super.initState();
+    dropDownController.text = city;
+  }
+
   // Get weather function
   Future<Map<String, dynamic>> getCurrentWeather() async {
+    final uri = Uri.https('api.openweathermap.org', '/data/2.5/forecast', {
+      'q': city,
+      'appid': _apiKey,
+    });
+
     try {
-      var response = await http.get(
-        Uri.parse(
-          "https://api.openweathermap.org/data/2.5/forecast?q=$city,&APPID=$openWeatherApiKey",
-        ),
-      );
-      // print('Response status: ${response.statusCode}');
-      // print(response.statusCode.runtimeType);
+      final response = await http.get(uri);
+
       if (response.statusCode != 200) {
-        throw "Unexpected error occurred";
+        throw Exception(
+          'Failed to load weather (status ${response.statusCode})',
+        );
       }
-      return jsonDecode(response.body);
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      final list = data['list'];
+      if (list == null || list is! List || list.isEmpty) {
+        throw Exception('Unexpected API response: missing forecast list');
+      }
+
+      return data;
     } catch (e) {
-      throw "Thrown  Error: ${e.toString()}";
+      // Preserve stack trace for callers
+      rethrow;
     }
   }
 
@@ -55,7 +75,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
           ),
         ],
       ),
-      body: FutureBuilder(
+      body: FutureBuilder<Map<String, dynamic>>(
         future: getCurrentWeather(),
         builder: (context, snapshot) {
           // print(snapshot);
@@ -64,15 +84,51 @@ class _WeatherScreenState extends State<WeatherScreen> {
             return const Center(child: CircularProgressIndicator.adaptive());
           }
           if (snapshot.hasError) {
-            return Center(child: Text(snapshot.error.toString()));
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Failed to load weather.'),
+                  const SizedBox(height: 8),
+                  Text(
+                    snapshot.error.toString(),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton(
+                    onPressed: () => setState(() {}),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            );
           }
+
           final forecastData = snapshot.data!;
-          final currentForecastData = forecastData["list"][0];
-          final temp = currentForecastData["main"]["temp"] - 273.15;
-          final currentSky = currentForecastData["weather"][0]["main"];
-          final currentPressure = currentForecastData["main"]["pressure"];
-          final currentHumidity = currentForecastData["main"]["humidity"];
-          final currentWindSpeed = currentForecastData["wind"]["speed"];
+          final forecastList = forecastData['list'];
+          if (forecastList is! List || forecastList.isEmpty) {
+            return const Center(child: Text('No forecast data available.'));
+          }
+
+          final currentForecastData = forecastList[0] as Map<String, dynamic>;
+
+          final tempK = (currentForecastData['main']['temp'] as num).toDouble();
+          final temp = tempK - 273.15;
+
+          final currentSky = (currentForecastData['weather'][0]['main'])
+              .toString();
+          final currentPressure = currentForecastData['main']['pressure']
+              .toString();
+          final currentHumidity = currentForecastData['main']['humidity']
+              .toString();
+          final currentWindSpeed = currentForecastData['wind']['speed']
+              .toString();
+
+          // calculate item count for hourly list (skip index 0 which is current)
+          final available = (forecastList.length);
+          final hourlyAvailable = available > 1 ? available - 1 : 0;
+          final hourlyItemCount = hourlyAvailable >= 8 ? 8 : hourlyAvailable;
 
           return Padding(
             padding: const EdgeInsets.all(10.0),
@@ -102,8 +158,10 @@ class _WeatherScreenState extends State<WeatherScreen> {
                       );
                     }).toList(),
                     onSelected: (String? item) {
+                      if (item == null) return;
                       setState(() {
-                        city = item!;
+                        city = item;
+                        dropDownController.text = item;
                       });
                     },
                   ),
@@ -128,7 +186,7 @@ class _WeatherScreenState extends State<WeatherScreen> {
                           child: Column(
                             children: [
                               Text(
-                                "${temp.toStringAsFixed(2)}` C",
+                                "${temp.toStringAsFixed(2)}° C",
                                 style: const TextStyle(
                                   fontSize: 35,
                                   fontWeight: FontWeight.bold,
@@ -156,51 +214,38 @@ class _WeatherScreenState extends State<WeatherScreen> {
                   "Forecast",
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-                /*SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      for (int i = 1; i < 40; i++)
-                        HourlyForecastItem(
-                          icon: forecastData["list"][i]["weather"][0]["main"]
-                                          .toString() ==
-                                      "Clouds" ||
-                                  forecastData["list"][i]["weather"][0]["main"]
-                                          .toString() ==
-                                      "Rain"
-                              ? Icons.cloud
-                              : Icons.sunny,
-                          time: forecastData["list"][i]["dt"].toString(),
-                          value: forecastData["list"][i]["main"]["temp"]
-                              .toString(),
-                        ),
-                    ],
-                  ),
-                ),*/
                 SizedBox(
                   height:
                       120, //SizeBox is needed otherwise the ListVie.builder will take up the entire screen
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: 8,
-                    itemBuilder: (context, index) {
-                      final hourlyForecast = forecastData["list"][index + 1];
-                      final hourlySky =
-                          forecastData["list"][index + 1]["weather"][0]["main"]
-                              .toString();
-                      final dateTime = DateTime.parse(hourlyForecast["dt_txt"]);
-                      final hourlyTemp = hourlyForecast["main"]["temp"]
-                          .toString();
-                      //print("$hourlySky, $dateTime, $hourlyTemp");
-                      return HourlyForecastItem(
-                        icon: hourlySky == "Clouds" || hourlySky == "Rain"
-                            ? Icons.cloud
-                            : Icons.sunny,
-                        time: DateFormat.j().format(dateTime),
-                        temp: hourlyTemp,
-                      );
-                    },
-                  ),
+                  child: hourlyItemCount == 0
+                      ? const Center(
+                          child: Text('No hourly forecast available'),
+                        )
+                      : ListView.builder(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: hourlyItemCount,
+                          itemBuilder: (context, index) {
+                            final hourlyForecast =
+                                forecastList[index + 1] as Map<String, dynamic>;
+                            final hourlySky =
+                                (hourlyForecast['weather'][0]['main'])
+                                    .toString();
+                            final dateTime = DateTime.parse(
+                              hourlyForecast['dt_txt'].toString(),
+                            );
+                            final hourlyTempK =
+                                (hourlyForecast['main']['temp'] as num)
+                                    .toDouble();
+                            final hourlyTempC = hourlyTempK - 273.15;
+                            return HourlyForecastItem(
+                              icon: hourlySky == "Clouds" || hourlySky == "Rain"
+                                  ? Icons.cloud
+                                  : Icons.sunny,
+                              time: DateFormat.j().format(dateTime),
+                              temp: "${hourlyTempC.toStringAsFixed(1)}°C",
+                            );
+                          },
+                        ),
                 ),
                 const SizedBox(height: 20),
                 const Text(
@@ -213,17 +258,17 @@ class _WeatherScreenState extends State<WeatherScreen> {
                     AdditionalWeatherInfo(
                       icon: Icons.cloudy_snowing,
                       weatherType: "Humidity",
-                      value: currentHumidity.toString(),
+                      value: currentHumidity,
                     ),
                     AdditionalWeatherInfo(
                       icon: Icons.wind_power,
                       weatherType: "Wind Speed",
-                      value: currentWindSpeed.toString(),
+                      value: currentWindSpeed,
                     ),
                     AdditionalWeatherInfo(
                       icon: Icons.ac_unit,
                       weatherType: "Pressure",
-                      value: currentPressure.toString(),
+                      value: currentPressure,
                     ),
                   ],
                 ),
